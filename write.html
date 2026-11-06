@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>対面ミラーボード</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #222;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100dvh;
+    }
+
+    /* 相手側（上半分・180度回転） */
+    .pane-top {
+      flex: 1;
+      position: relative;
+      background-color: #fff;
+      transform: rotate(180deg);
+      overflow: hidden;
+      border-top: 2px solid #888; /* 回転しているため下辺になる */
+    }
+
+    /* 自分側（下半分・正位置） */
+    .pane-bottom {
+      flex: 1;
+      position: relative;
+      background-color: #fff;
+      overflow: hidden;
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      touch-action: none; /* スクロールやズームを無効化 */
+    }
+
+    .bg-layer {
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .draw-layer {
+      z-index: 2;
+    }
+
+    /* 相手側ラベル（相手から正位置で見える） */
+    .guest-badge {
+      position: absolute;
+      top: 8px;
+      right: 12px;
+      z-index: 3;
+      font-size: 11px;
+      color: #999;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 2px 6px;
+      border-radius: 4px;
+      pointer-events: none;
+    }
+
+    /* 最下部（手前）のコントロールバー */
+    .toolbar {
+      height: 56px;
+      background-color: #1e1e1e;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      gap: 8px;
+      z-index: 10;
+      border-top: 1px solid #333;
+    }
+
+    .tool-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    button {
+      background: #333;
+      color: #fff;
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s;
+    }
+
+    button:active {
+      background: #555;
+    }
+
+    button.active {
+      background: #0a84ff;
+      border-color: #0a84ff;
+      font-weight: bold;
+    }
+
+    .color-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      padding: 0;
+      border: 2px solid #555;
+    }
+
+    .color-btn.active {
+      border: 3px solid #fff;
+      transform: scale(1.1);
+    }
+
+    .size-btn {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+    }
+
+    .dot {
+      background: #fff;
+      border-radius: 50%;
+      display: block;
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+<div class="app-container">
+  <!-- 相手側画面（180度反転） -->
+  <div class="pane-top" id="paneTop">
+    <div class="guest-badge">相手側表示（自動反転）</div>
+    <canvas id="bgTop" class="bg-layer"></canvas>
+    <canvas id="drawTop" class="draw-layer"></canvas>
+  </div>
+
+  <!-- 自分側画面（手前・正位置） -->
+  <div class="pane-bottom" id="paneBottom">
+    <canvas id="bgBottom" class="bg-layer"></canvas>
+    <canvas id="drawBottom" class="draw-layer"></canvas>
+  </div>
+
+  <!-- 一番下（手前）の操作パネル -->
+  <div class="toolbar">
+    <!-- 色選択 -->
+    <div class="tool-group">
+      <button class="color-btn active" style="background:#111111;" data-color="#111111" aria-label="黒"></button>
+      <button class="color-btn" style="background:#e53935;" data-color="#e53935" aria-label="赤"></button>
+      <button class="color-btn" style="background:#1e88e5;" data-color="#1e88e5" aria-label="青"></button>
+      <button class="color-btn" style="background:#43a047;" data-color="#43a047" aria-label="緑"></button>
+    </div>
+
+    <!-- 太さ・消しゴム -->
+    <div class="tool-group">
+      <button class="size-btn active" data-size="2.5" aria-label="細"><span class="dot" style="width:4px;height:4px;"></span></button>
+      <button class="size-btn" data-size="5" aria-label="中"><span class="dot" style="width:8px;height:8px;"></span></button>
+      <button class="size-btn" data-size="10" aria-label="太"><span class="dot" style="width:13px;height:13px;"></span></button>
+      <button id="eraserBtn">消しゴム</button>
+    </div>
+
+    <!-- 機能ボタン -->
+    <div class="tool-group">
+      <button id="penOnlyBtn" class="active" title="オンにするとApple Pencil以外での誤タッチを防ぎます">ペン専用: ON</button>
+      <button id="undoBtn">戻す</button>
+      <button id="bgBtn">画像読込</button>
+      <input type="file" id="bgInput" accept="image/*">
+      <button id="clearBtn" style="color:#ff6b6b;">全消去</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const paneTop = document.getElementById('paneTop');
+  const paneBottom = document.getElementById('paneBottom');
+
+  const bgTop = document.getElementById('bgTop');
+  const bgBottom = document.getElementById('bgBottom');
+  const drawTop = document.getElementById('drawTop');
+  const drawBottom = document.getElementById('drawBottom');
+
+  const ctxBgTop = bgTop.getContext('2d');
+  const ctxBgBottom = bgBottom.getContext('2d');
+  const ctxTop = drawTop.getContext('2d');
+  const ctxBottom = drawBottom.getContext('2d');
+
+  // 状態管理
+  let isDrawing = false;
+  let lastX = 0;
+  let lastY = 0;
+  let currentColor = '#111111';
+  let currentSize = 2.5;
+  let isEraser = false;
+  let penOnly = true; // デフォルトでApple Pencil専用（手をついて書けるように）
+  let history = [];
+  const MAX_HISTORY = 20;
+
+  // Canvasサイズ初期化・リサイズ対応
+  function resizeCanvases() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = paneBottom.getBoundingClientRect();
+
+    // 現在の描画内容を一時退避
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = drawBottom.width;
+    tempCanvas.height = drawBottom.height;
+    if (tempCanvas.width > 0 && tempCanvas.height > 0) {
+      tempCanvas.getContext('2d').drawImage(drawBottom, 0, 0);
+    }
+
+    [bgTop, bgBottom, drawTop, drawBottom].forEach(c => {
+      c.width = rect.width * dpr;
+      c.height = rect.height * dpr;
+      const ctx = c.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+    });
+
+    // 退避した描画を復元
+    if (tempCanvas.width > 0 && tempCanvas.height > 0) {
+      ctxBottom.drawImage(tempCanvas, 0, 0, rect.width, rect.height);
+      syncMirror();
+    }
+  }
+
+  window.addEventListener('resize', resizeCanvases);
+  resizeCanvases();
+
+  // 相手側Canvasへ描画内容をミラー同期
+  function syncMirror() {
+    const rect = paneBottom.getBoundingClientRect();
+    ctxTop.clearRect(0, 0, rect.width, rect.height);
+    ctxTop.drawImage(drawBottom, 0, 0, rect.width, rect.height);
+  }
+
+  // 履歴保存（Undo用）
+  function saveHistory() {
+    if (history.length >= MAX_HISTORY) history.shift();
+    history.push(drawBottom.toDataURL());
+  }
+
+  // 描画開始
+  drawBottom.addEventListener('pointerdown', (e) => {
+    if (penOnly && e.pointerType !== 'pen') return;
+    isDrawing = true;
+    saveHistory();
+    lastX = e.offsetX;
+    lastY = e.offsetY;
+  });
+
+  // 描画中
+  drawBottom.addEventListener('pointermove', (e) => {
+    if (!isDrawing) return;
+    if (penOnly && e.pointerType !== 'pen') return;
+
+    // 筆圧対応（Apple Pencilなら0.0〜1.0、マウス等は0.5固定）
+    const pressure = e.pointerType === 'pen' && e.pressure > 0 ? e.pressure * 1.6 : 1;
+
+    ctxBottom.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
+    ctxBottom.strokeStyle = currentColor;
+    ctxBottom.lineWidth = isEraser ? currentSize * 5 : currentSize * pressure;
+
+    ctxBottom.beginPath();
+    ctxBottom.moveTo(lastX, lastY);
+    ctxBottom.lineTo(e.offsetX, e.offsetY);
+    ctxBottom.stroke();
+
+    lastX = e.offsetX;
+    lastY = e.offsetY;
+
+    syncMirror();
+  });
+
+  // 描画終了
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => {
+    drawBottom.addEventListener(ev, () => {
+      isDrawing = false;
+    });
+  });
+
+  // 色変更
+  document.querySelectorAll('.color-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      isEraser = false;
+      document.getElementById('eraserBtn').classList.remove('active');
+      document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentColor = btn.dataset.color;
+    });
+  });
+
+  // 太さ変更
+  document.querySelectorAll('.size-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.size-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentSize = parseFloat(btn.dataset.size);
+    });
+  });
+
+  // 消しゴム切替
+  const eraserBtn = document.getElementById('eraserBtn');
+  eraserBtn.addEventListener('click', () => {
+    isEraser = !isEraser;
+    eraserBtn.classList.toggle('active', isEraser);
+  });
+
+  // ペン専用モード切替（指で書きたい時はOFFにする）
+  const penOnlyBtn = document.getElementById('penOnlyBtn');
+  penOnlyBtn.addEventListener('click', () => {
+    penOnly = !penOnly;
+    penOnlyBtn.classList.toggle('active', penOnly);
+    penOnlyBtn.textContent = penOnly ? 'ペン専用: ON' : 'ペン専用: OFF';
+  });
+
+  // 1つ戻す（Undo）
+  document.getElementById('undoBtn').addEventListener('click', () => {
+    if (history.length === 0) return;
+    const prev = history.pop();
+    const img = new Image();
+    img.onload = () => {
+      const rect = paneBottom.getBoundingClientRect();
+      ctxBottom.globalCompositeOperation = 'source-over';
+      ctxBottom.clearRect(0, 0, rect.width, rect.height);
+      ctxBottom.drawImage(img, 0, 0, rect.width, rect.height);
+      syncMirror();
+    };
+    img.src = prev;
+  });
+
+  // 全消去
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    saveHistory();
+    const rect = paneBottom.getBoundingClientRect();
+    ctxBottom.clearRect(0, 0, rect.width, rect.height);
+    ctxTop.clearRect(0, 0, rect.width, rect.height);
+  });
+
+  // 背景画像の読み込み（両画面にフィット表示）
+  const bgInput = document.getElementById('bgInput');
+  document.getElementById('bgBtn').addEventListener('click', () => bgInput.click());
+  bgInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const rect = paneBottom.getBoundingClientRect();
+        // アスペクト比を維持して中央配置
+        const scale = Math.min(rect.width / img.width, rect.height / img.height);
+        const w = img.width * scale;
+        const h = img.height * scale;
+        const x = (rect.width - w) / 2;
+        const y = (rect.height - h) / 2;
+
+        [ctxBgBottom, ctxBgTop].forEach(ctx => {
+          ctx.clearRect(0, 0, rect.width, rect.height);
+          ctx.drawImage(img, x, y, w, h);
+        });
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+    bgInput.value = '';
+  });
+</script>
+</body>
+</html>
